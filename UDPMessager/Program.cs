@@ -14,18 +14,17 @@ namespace UDPMessager
             UDPer client = new UDPer();
             Console.WriteLine($"UDP Communicator on port {UDPer.PORT_NUMBER}");
             client.Start();
-            client.Send("" + Pocet_ludi);
-            var x = Console.ReadKey();
-            while(x.Key != ConsoleKey.Escape)
+            var x = Console.ReadLine();
+            while(x != "q")
             {
-                client.Send(x.KeyChar.ToString());
-                x = Console.ReadKey();
+                client.Send(x);
+                x = Console.ReadLine();
             }
 
         }
         class UDPer
         {
-            public static readonly int PORT_NUMBER = 6969;
+            public static readonly int PORT_NUMBER = 5490;
             Thread t = null;
             public void Start()
             {
@@ -58,7 +57,7 @@ namespace UDPMessager
                 IPEndPoint ip = new IPEndPoint(IPAddress.Any, PORT_NUMBER);
                 byte[] bytes = udp.EndReceive(ar, ref ip);
                 string message = Encoding.ASCII.GetString(bytes);
-                Console.WriteLine("From {0} received: {1} ", ip.Address.ToString(), message);
+                Console.WriteLine("From {0} at {2} received: {1} ", ip.Address.ToString(), message, DateTime.Now.ToString("MM/dd/yyyy HH:mm:ss"));
                 StartListening();
             }
             public void Send(string message)
