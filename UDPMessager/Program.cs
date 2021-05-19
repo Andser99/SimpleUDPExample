@@ -1,4 +1,5 @@
 ﻿using System;
+using System.Linq;
 using System.Net;
 using System.Net.Sockets;
 using System.Text;
@@ -10,21 +11,43 @@ namespace UDPMessager
     class Program
     {
         public static int Pocet_ludi = 9;
+        static void PrintInfoMessage()
+        {
+            Console.WriteLine("Any messages which don't start with PORT/TCP/BYTES:");
+            Console.WriteLine("are broadcast to 255.255.255.255");
+            Console.WriteLine("PORT <port_number>  - sets the UDP port number to the specified port");
+            Console.WriteLine("TCP<address><message> - sends a TCP message to the specified address");
+            Console.WriteLine("BYTES:<message> - Sends a base 64 encoded message");
+            Console.WriteLine("--------------------------------------------------------------------");
+        }
         static void Main(string[] args)
         {
+            PrintInfoMessage();
             UDPer client = new UDPer();
-            Console.WriteLine($"UDP Communicator on port {UDPer.PORT_NUMBER}");
-            client.Start();
+            Console.WriteLine($"UDP Communicator on port {client.Port}");
             var x = Console.ReadLine();
             while(x != "q")
             {
-                if (x.Contains("TCP"))
+                if (x.StartsWith("PORT"))
+                {
+                    int.TryParse(x.Split("PORT")[0], out int port);
+                    Console.WriteLine($"Port set to {port}");
+                    client.Port = port;
+                }
+                else if (x.StartsWith("TCP"))
                 {
                     client.SendTCP(x.Split(">")[1], IPAddress.Parse(x.Split('<')[1].Split('>')[0]));
                 }
                 else
                 {
-                    client.Send(x);
+                    if (x.StartsWith("BYTES:"))
+                    {
+                        client.Send(x.Split("BYTES:")[1], true);
+                    }
+                    else
+                    {
+                        client.Send(x);
+                    }
                 }
                 x = Console.ReadLine();
             }
@@ -32,51 +55,137 @@ namespace UDPMessager
         }
         class UDPer
         {
+            //Default port number for Elisan networking
             public static readonly int PORT_NUMBER = 5490;
-            Thread t = null;
+            private int _port;
+            Task tcpListenerTask = null;
+            public int Port
+            {
+                get
+                {
+                    return _port;
+                }
+                set
+                {
+                    if (value != _port)
+                    {
+                        if (udp != null && udp2 != null)
+                        {
+                            Stop();
+                        }
+                        udp = new UdpClient("localhost", value);
+                        udp2 = new UdpClient("localhost", value + 1);
+                        Start();
+                    }
+                    _port = value;
+                }
+            }
+
+            public UDPer(int port = 8888)
+            {
+                Port = port;
+                udp = new UdpClient("localhost", Port);
+                udp2 = new UdpClient("localhost", Port + 1);
+            }
             public void Start()
             {
-                if (t != null)
-                {
-                    throw new Exception("Already started, stop first");
-                }
-                Console.WriteLine("Started listening");
+                Console.WriteLine("UDP Started listening on {0}", Port);
                 StartListening();
-                StartTCPListener();
+                if (tcpListenerTask == null)
+                {
+                    tcpListenerTask = StartTCPListener();
+                }
             }
             public void Stop()
             {
                 try
                 {
                     udp.Close();
-                    Console.WriteLine("Stopped listening");
+                    udp2.Close();
+                    Console.WriteLine("UDP Stopped listening");
                 }
                 catch { /* don't care */ }
             }
 
-            private readonly UdpClient udp = new UdpClient(PORT_NUMBER);
-            IAsyncResult ar_ = null;
+            private UdpClient udp;
+            private UdpClient udp2;
+
 
             private void StartListening()
             {
-                ar_ = udp.BeginReceive(Receive, new object());
+                udp.BeginReceive(Receive, new object());
+                udp2.BeginReceive(Receive2, new object());
             }
             private void Receive(IAsyncResult ar)
             {
-                IPEndPoint ip = new IPEndPoint(IPAddress.Any, PORT_NUMBER);
-                byte[] bytes = udp.EndReceive(ar, ref ip);
+                IPEndPoint ip = new IPEndPoint(IPAddress.Any, Port);
+                byte[] bytes;
+                try
+                {
+                    bytes = udp.EndReceive(ar, ref ip);
+
+                }
+                catch(Exception e)
+                {
+                    Console.WriteLine($"{udp.Client} was closed");
+                    System.Diagnostics.Debug.WriteLine(e);
+                    return;
+                }
                 string message = Encoding.ASCII.GetString(bytes);
                 Console.WriteLine("From {0} at {2} received: {1} ", ip.Address.ToString(), message, DateTime.Now.ToString("MM/dd/yyyy HH:mm:ss"));
                 StartListening();
             }
-            public void Send(string message)
+            private void Receive2(IAsyncResult ar)
+            {
+                IPEndPoint ip = new IPEndPoint(IPAddress.Any, Port + 1);
+                byte[] bytes;
+                try
+                {
+                    bytes = udp2.EndReceive(ar, ref ip);
+
+                }
+                catch (Exception e)
+                {
+                    Console.WriteLine($"{udp.Client} was closed");
+                    System.Diagnostics.Debug.WriteLine(e);
+                    return;
+                }
+                string message = Encoding.ASCII.GetString(bytes);
+                Console.WriteLine("From {0} at {2} received: {1} ", ip.Address.ToString(), message, DateTime.Now.ToString("MM/dd/yyyy HH:mm:ss"));
+                StartListening();
+            }
+
+            public void Send(string message, bool asBytes = false)
             {
                 UdpClient client = new UdpClient();
-                IPEndPoint ip = new IPEndPoint(IPAddress.Parse("255.255.255.255"), PORT_NUMBER);
-                byte[] bytes = Encoding.ASCII.GetBytes(message);
+                IPEndPoint ip = new IPEndPoint(IPAddress.Parse("255.255.255.255"), Port);
+                //IPEndPoint ip = new IPEndPoint(IPAddress.Parse("127.0.0.1"), PORT_NUMBER);
+
+                byte[] bytes;
+                if (asBytes)
+                {
+                    if (message.Length % 2 != 0)
+                    {
+                        Console.WriteLine("Invalid message length (not a multiple of 2)");
+                        return;
+                    }
+                    else
+                    {
+                        bytes = Enumerable.Range(0, message.Length)
+                            .Where(x => x % 2 == 0)
+                            .Select(x => Convert.ToByte(message.Substring(x, 2), 16))
+                            .ToArray();
+                    }
+                }
+                else
+                {
+                    bytes = Encoding.ASCII.GetBytes(message);
+                } 
+
+
                 client.Send(bytes, bytes.Length, ip);
                 client.Close();
-                Console.WriteLine("Sent: {0} ", message);
+                Console.WriteLine("Sent ({1}): {0}", message, asBytes ? "as bytes" : "as text");
             }
 
             public void SendTCP(string message, IPAddress ip)
@@ -88,7 +197,10 @@ namespace UDPMessager
                     {
                         client.Connect(ip, 5939);
                     }
-                    catch (Exception e) { }
+                    catch (Exception e) 
+                    {
+                        System.Diagnostics.Debug.WriteLine(e);
+                    }
                 }
                 Byte[] data = Encoding.ASCII.GetBytes(message);
 
@@ -100,7 +212,7 @@ namespace UDPMessager
                 // Send the message to the connected TcpServer.
                 stream.Write(data, 0, data.Length);
             }
-            private async void StartTCPListener()
+            private async Task StartTCPListener()
             {
                 IPAddress localAdd = IPAddress.Parse("127.0.0.1");
                 //Port 5939 for TCP connections                IPAddress localIP;
@@ -115,8 +227,10 @@ namespace UDPMessager
                 } catch (Exception e)
                 {
                     Console.WriteLine("Couldn't get local network address, defaulting to 127.0.0.1");
+                    System.Diagnostics.Debug.WriteLine(e);
                 }
                 TcpListener listener = new TcpListener(localAdd, 5939);
+                Console.WriteLine("TCP listening on {0}:{1}", localAdd, 5939);
                 await Task.Delay(500);
                 listener.Start();
 
